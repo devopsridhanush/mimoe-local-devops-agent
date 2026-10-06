@@ -1,61 +1,73 @@
 # mimOE Local DevOps Runbook Agent
 
-A lightweight AI agent built using the **BYO Framework** approach with **mimOE Studio**, the **OpenAI Python SDK**, and a locally hosted `smollm-360m` model.
+A lightweight AI agent built using the **BYO Framework** approach with **mimOE Studio**, the **OpenAI Python SDK**, and the locally hosted `smollm-360m` model.
 
-The goal of this project was to explore mimOE Studio, understand its local inference capabilities, connect to its OpenAI-compatible API, and build a small working AI agent that can be clearly explained and demonstrated.
+The goal of this project was to explore mimOE Studio, understand its local inference capabilities, connect to its OpenAI-compatible API, and build a small working AI agent that is simple to run, explain, and extend.
 
 ---
 
 ## Overview
 
-This project implements a small **DevOps Runbook Agent** that can answer focused troubleshooting questions related to:
+This project implements a focused **DevOps Runbook Agent** for troubleshooting common Docker and Kubernetes issues.
 
-- Docker
-- Kubernetes
-- Container restarts
+The agent currently supports:
+
+- Docker container restart troubleshooting
+- Docker operational commands
+- Kubernetes pod troubleshooting
 - Kubernetes `CrashLoopBackOff`
-- Basic operational troubleshooting commands
+- Basic local inference health checks
 
-The agent communicates with a `smollm-360m` model loaded through mimOE Studio.
+The application communicates with the `smollm-360m` model through the OpenAI-compatible API exposed by mimOE.
 
-Instead of sending prompts to an external LLM provider, the application communicates with the OpenAI-compatible inference endpoint exposed by mimOE.
+No OpenAI, Anthropic, or other hosted LLM API is used for inference.
 
-The final flow is:
+---
 
-```text
-User
-  |
-  v
-Python DevOps Agent
-  |
-  | OpenAI Python SDK
-  |
-  v
-mimOE OpenAI-Compatible API
-  |
-  v
-smollm-360m
-  |
-  v
-Local inference on the mimOE runtime host
+## Architecture
+
+```mermaid
+flowchart TD
+
+    U[User]
+
+    subgraph EC2["AWS EC2 - Windows Instance"]
+        A[Python DevOps Runbook Agent]
+        T[Topic Detection]
+        R[Trusted Docker / Kubernetes Runbooks]
+        SDK[OpenAI Python SDK]
+        API[mimOE OpenAI-Compatible API<br/>Port 8083]
+        MODEL[smollm-360m]
+        INF[Local Model Inference]
+    end
+
+    U --> A
+    A --> T
+    T --> R
+    R --> SDK
+    SDK -->|HTTP / Chat Completions| API
+    API --> MODEL
+    MODEL --> INF
+    INF -->|Grounded Response| A
+    A --> U
 ```
+
+In this setup, **AWS EC2 is only the host environment**. The language model itself runs through the mimOE runtime on that host.
 
 ---
 
 ## Why I Built This
 
-The purpose of this exercise was not to create a large production AI platform.
-
-The main objectives were to demonstrate that I could:
+The purpose of this exercise was to demonstrate the ability to:
 
 1. Explore an unfamiliar AI platform.
 2. Install and configure mimOE Studio.
 3. Load and run a local language model.
-4. Discover and test the inference API.
-5. Connect an existing AI SDK to the mimOE endpoint.
-6. Build a simple agent using the BYO Framework approach.
-7. Handle runtime and resource-related issues.
-8. Explain the design decisions and limitations clearly.
+4. Discover and validate the local inference API.
+5. Connect an existing AI SDK to mimOE.
+6. Build a small AI agent using the BYO Framework approach.
+7. Troubleshoot runtime and resource issues.
+8. Explain design choices and limitations clearly.
 
 ---
 
@@ -75,11 +87,9 @@ The main objectives were to demonstrate that I could:
 
 ## Development Environment
 
-### Initial Local Development
+### Initial Local Attempt
 
-I initially installed mimOE Studio on my Windows desktop.
-
-The machine had approximately:
+I initially installed mimOE Studio on a Windows desktop with approximately:
 
 ```text
 8 GB RAM
@@ -87,16 +97,14 @@ Intel UHD Graphics 630
 NVIDIA GTX 1650 Max-Q
 ```
 
-During testing, the operating system had very little free memory available.
-
-For example:
+During testing, the machine had very limited free memory available:
 
 ```text
 Total RAM : ~7.85 GB
 Free RAM  : ~1 GB
 ```
 
-When attempting to load the model, mimOE returned errors such as:
+When loading the model, mimOE returned errors including:
 
 ```text
 500 Internal Server Error
@@ -105,18 +113,40 @@ llama_model_load_from_file error:
 unable to load model
 ```
 
-I also observed cases where the runtime became unavailable after the failed load attempt.
+I also observed that the runtime could become unavailable after failed model-loading attempts.
 
-To troubleshoot the issue, I validated:
+---
 
-- mimOE runtime availability
-- port `8083`
-- the model registry
-- model download status
-- available system memory
-- network connectivity
+## Troubleshooting Performed
 
-The model registry confirmed that the model was downloaded successfully:
+I validated the environment step by step instead of assuming the model itself was broken.
+
+### Runtime connectivity
+
+```powershell
+Test-NetConnection localhost -Port 8083
+```
+
+Expected:
+
+```text
+TcpTestSucceeded : True
+```
+
+### Model registry
+
+```powershell
+$headers = @{
+    Authorization = "Bearer <API_KEY>"
+}
+
+Invoke-RestMethod `
+    -Uri "http://localhost:8083/mimik-ai/store/v1/models" `
+    -Method GET `
+    -Headers $headers
+```
+
+The registry confirmed:
 
 ```text
 Model      : smollm-360m
@@ -124,30 +154,41 @@ readyToUse : true
 Size       : ~386 MB
 ```
 
-This indicated that the problem was not model registration or download, but resource pressure during model loading.
+This showed that the model was registered and downloaded correctly.
+
+### Network connectivity
+
+```powershell
+Test-NetConnection huggingface.co -Port 443
+```
+
+### Available memory
+
+```powershell
+Get-CimInstance Win32_OperatingSystem |
+Select-Object `
+    @{Name="TotalRAM_GB";Expression={[math]::Round($_.TotalVisibleMemorySize/1MB,2)}},
+    @{Name="FreeRAM_GB";Expression={[math]::Round($_.FreePhysicalMemory/1MB,2)}}
+```
+
+The main limiting factor on the original desktop was low available memory.
 
 ---
 
 ## Why I Used AWS EC2
 
-Because my desktop had limited available memory, I decided not to make the assignment dependent on an unstable local environment.
-
-Instead, I used a Windows-based **AWS EC2 instance** with more available resources and installed mimOE Studio there.
+Because the original desktop had limited available memory, I moved the development environment to a better-resourced **Windows AWS EC2 instance**.
 
 This allowed me to:
 
-- provide mimOE with sufficient memory,
-- run the local mimOE runtime reliably,
+- run mimOE Studio more reliably,
+- keep the mimOE runtime available,
 - load `smollm-360m`,
-- expose the inference endpoint,
+- expose the inference API,
 - develop and test the Python agent,
-- and complete the assignment without changing the overall architecture.
+- complete the assignment without changing the application design.
 
-An important distinction is that the LLM inference is still performed by the **mimOE runtime itself**.
-
-The application does not send prompts to OpenAI, Anthropic, or another external LLM API.
-
-In the final development environment:
+The final setup is:
 
 ```text
 AWS EC2 Windows Instance
@@ -158,64 +199,18 @@ AWS EC2 Windows Instance
         |
         +-- smollm-360m
         |
-        +-- Local OpenAI-compatible API
+        +-- OpenAI-compatible local API
         |
         +-- Python DevOps Agent
 ```
 
-Therefore, inference is local to the mimOE runtime host, although that host is an EC2 virtual machine rather than my physical laptop.
-
-This was also a useful part of the exercise because it demonstrated that the application code was not tightly coupled to a specific physical machine.
-
----
-
-## Architecture
-
-```text
-+--------------------------+
-|          User            |
-+------------+-------------+
-             |
-             v
-+--------------------------+
-|   Python DevOps Agent    |
-|                          |
-| - Topic selection        |
-| - Runbook context        |
-| - Error handling         |
-| - Health check           |
-+------------+-------------+
-             |
-             | OpenAI Python SDK
-             |
-             | HTTP
-             v
-+--------------------------+
-|      mimOE Runtime       |
-|                          |
-| OpenAI-compatible API    |
-| /mimik-ai/openai/v1      |
-+------------+-------------+
-             |
-             v
-+--------------------------+
-|      smollm-360m         |
-|                          |
-| Local model inference    |
-+--------------------------+
-```
+Inference is still performed by the **mimOE runtime**, but the runtime host is the EC2 virtual machine rather than the original physical desktop.
 
 ---
 
 ## mimOE API
 
-After loading `smollm-360m` in mimOE Studio, the Model View exposed an OpenAI-compatible API.
-
-The API follows the familiar OpenAI interface:
-
-```text
-POST /chat/completions
-```
+After loading `smollm-360m`, mimOE exposes an OpenAI-compatible API.
 
 Example base URL:
 
@@ -223,9 +218,13 @@ Example base URL:
 http://<MIMOE_HOST>:8083/mimik-ai/openai/v1
 ```
 
-The application therefore uses the normal OpenAI Python client while changing the `base_url` to point to mimOE.
+The chat-completions endpoint follows the OpenAI-compatible pattern:
 
-Example:
+```text
+POST /chat/completions
+```
+
+The Python application uses:
 
 ```python
 from openai import OpenAI
@@ -236,77 +235,57 @@ client = OpenAI(
 )
 ```
 
-The application then calls:
+and sends requests with:
 
 ```python
 client.chat.completions.create(...)
 ```
 
-This was one of the most useful aspects of the integration because an application designed around an OpenAI-compatible interface can be redirected to mimOE without requiring a major rewrite.
+This makes it easy to reuse familiar OpenAI SDK patterns while routing inference to mimOE.
 
 ---
 
 ## Why I Used the OpenAI Python SDK
 
-I deliberately chose the standard OpenAI Python SDK instead of adding LangChain, CrewAI, or another orchestration framework.
+I intentionally used the standard OpenAI Python SDK instead of LangChain, CrewAI, or another orchestration framework.
 
-The assignment was primarily about exploring and integrating mimOE.
-
-Using the direct SDK provided several benefits:
+Reasons:
 
 - fewer dependencies,
 - easier debugging,
-- clear visibility into the mimOE integration,
+- clearer mimOE integration,
 - less abstraction,
-- simple architecture,
-- easier explanation during a technical interview.
+- easier explanation during an interview,
+- appropriate scope for a 1–2 hour assignment.
 
-A larger framework could be added later if orchestration, tools, RAG, or multi-agent workflows were required.
+A larger framework could be introduced later if the project required tools, RAG, workflows, or multi-agent orchestration.
 
 ---
 
 ## Agent Design
 
-The initial version of the application directly sent DevOps questions to `smollm-360m`.
+The first version sent DevOps questions directly to `smollm-360m`.
 
-That successfully proved that mimOE inference worked.
+This proved that the mimOE inference path was working, but because `smollm-360m` is a small model, open-ended technical questions could produce inaccurate responses.
 
-However, because `smollm-360m` is intentionally a very small model, unconstrained technical questions sometimes produced inaccurate answers.
+To improve reliability, I changed the design to a **grounded runbook approach**.
 
-Rather than hiding that limitation, I changed the design to use a small **grounded runbook architecture**.
-
-The final flow is:
-
-```text
-User Question
-      |
-      v
-Determine DevOps Topic
-      |
-      v
-Select Trusted Runbook
-      |
-      v
-Runbook + Question
-      |
-      v
-smollm-360m through mimOE
-      |
-      v
-Grounded Answer
+```mermaid
+flowchart LR
+    Q[User Question] --> T[Detect Topic]
+    T --> R[Select Trusted Runbook]
+    R --> P[Build Grounded Prompt]
+    P --> M[smollm-360m via mimOE]
+    M --> A[Grounded Answer]
 ```
 
-The model is instructed to answer only from the supplied runbook.
+The model is instructed to answer only from the supplied runbook context.
 
-This reduces hallucination and demonstrates an important AI engineering principle:
-
-> A smaller local model can become more reliable when it is given focused, trusted context.
+This reduces hallucination and keeps the solution lightweight.
 
 ---
 
 ## Supported Runbooks
-
-The current proof-of-concept includes runbooks for:
 
 ### Docker container restart troubleshooting
 
@@ -328,7 +307,7 @@ kubectl describe pod <pod-name>
 kubectl logs <pod-name> --previous
 ```
 
-The project intentionally keeps the knowledge base small because the objective is to demonstrate the mimOE integration rather than create a complete DevOps knowledge platform.
+The project intentionally keeps the runbooks small because the goal is to demonstrate the mimOE integration rather than build a complete DevOps knowledge platform.
 
 ---
 
@@ -370,14 +349,12 @@ Do not commit the real `.env` file.
 
 ### 1. Clone the repository
 
-```bash
+```powershell
 git clone <repository-url>
 cd mimoe-local-devops-agent
 ```
 
-### 2. Create a Python virtual environment
-
-Windows PowerShell:
+### 2. Create a virtual environment
 
 ```powershell
 python -m venv .venv
@@ -396,9 +373,21 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 pip install -r requirements.txt
 ```
 
-### 4. Configure the environment
+### 4. Configure environment variables
 
-Copy `.env.example` to `.env` and update the mimOE endpoint values.
+Copy:
+
+```text
+.env.example
+```
+
+to:
+
+```text
+.env
+```
+
+and update the mimOE endpoint, API key, and model name.
 
 ---
 
@@ -409,56 +398,22 @@ Before running the Python application:
 1. Start mimOE Studio.
 2. Connect to the local/external mimOE runtime.
 3. Open **AI Models**.
-4. Load `smollm-360m`.
+4. Load:
+
+```text
+smollm-360m
+```
+
 5. Open the model's **API** view.
 6. Confirm the inference base URL.
 7. Confirm the API key.
-8. Keep the model loaded while running the Python agent.
-
----
-
-## Verifying the mimOE Runtime
-
-On Windows, the runtime can be checked with PowerShell:
-
-```powershell
-Test-NetConnection localhost -Port 8083
-```
-
-A healthy runtime should return:
-
-```text
-TcpTestSucceeded : True
-```
-
-The model registry can also be queried to confirm that the model is available.
-
-Example:
-
-```powershell
-$headers = @{
-    Authorization = "Bearer <API_KEY>"
-}
-
-Invoke-RestMethod `
-    -Uri "http://localhost:8083/mimik-ai/store/v1/models" `
-    -Method GET `
-    -Headers $headers
-```
-
-The expected model status is:
-
-```text
-readyToUse : true
-```
+8. Keep the model loaded while running the agent.
 
 ---
 
 ## Direct API Validation
 
-Before writing the Python agent, I validated the mimOE API directly using PowerShell.
-
-Example:
+Before building the Python agent, I validated the mimOE API directly with PowerShell.
 
 ```powershell
 $headers = @{
@@ -486,7 +441,20 @@ $response = Invoke-RestMethod `
 $response.choices[0].message.content
 ```
 
-This confirmed that the client, mimOE API, and local model inference path were working before introducing additional application logic.
+This confirmed the full inference path:
+
+```text
+PowerShell / Python Client
+        |
+        v
+mimOE API
+        |
+        v
+smollm-360m
+        |
+        v
+Generated Response
+```
 
 ---
 
@@ -498,7 +466,7 @@ Start the application:
 python .\agent.py
 ```
 
-Example:
+Example startup output:
 
 ```text
 ============================================================
@@ -523,7 +491,11 @@ Commands:
 
 ## Health Check
 
-The agent includes a `/health` command.
+The application includes a simple health command:
+
+```text
+/health
+```
 
 Example:
 
@@ -541,6 +513,8 @@ This confirms that the Python application can communicate with the mimOE inferen
 
 ## Example Interaction
 
+### Docker
+
 ```text
 You:
 A Docker container keeps restarting. What should I check?
@@ -556,7 +530,7 @@ Agent:
    docker inspect <container-name>
 ```
 
-Another example:
+### Kubernetes
 
 ```text
 You:
@@ -577,9 +551,7 @@ kubectl logs <pod-name> --previous
 
 ## Error Handling
 
-The application handles common failure conditions.
-
-For example, if mimOE is unavailable:
+If mimOE is unavailable, the agent provides a useful message instead of exposing only a raw Python exception.
 
 ```text
 Unable to connect to mimOE.
@@ -591,52 +563,46 @@ Make sure:
 4. The endpoint in .env matches Studio.
 ```
 
-This is more useful to the user than exposing a raw Python connection exception.
-
----
-
-## Troubleshooting Experience
-
-One of the useful parts of this exercise was troubleshooting the initial model-loading problem.
-
-I used PowerShell to validate the runtime process, runtime port, model registry, available RAM, and network connectivity. This allowed me to distinguish between network problems, runtime problems, model-download problems, and host-resource limitations.
-
-That troubleshooting eventually led to moving the development environment to a better-resourced EC2 instance.
-
 ---
 
 ## Security Considerations
 
-The project follows some basic security practices:
+The project follows basic security practices:
 
 - `.env` is excluded from Git.
-- API configuration is not hard-coded in the Python source.
-- `.env.example` contains only example configuration.
-- The Python virtual environment is excluded from the repository.
-- The agent does not execute commands supplied by the language model.
-- DevOps commands are presented as recommendations only.
+- API configuration is not hard-coded in Python.
+- `.env.example` contains example values only.
+- `.venv` is excluded from Git.
+- The model does not automatically execute infrastructure commands.
+- Suggested DevOps commands are advisory only.
 
-For a production environment I would also add proper secrets management, authentication, network restrictions, TLS, structured audit logging, input validation, and stronger authorization controls.
+For production use, I would also add:
+
+- proper secrets management,
+- TLS,
+- stronger authentication,
+- network restrictions,
+- structured audit logging,
+- input validation,
+- role-based authorization.
 
 ---
 
 ## Current Limitations
 
-This is intentionally a small proof-of-concept.
+This is intentionally a focused proof of concept.
 
-Current limitations include:
+Current limitations:
 
 - `smollm-360m` is a small model.
-- The agent currently supports only a small set of DevOps topics.
-- Runbooks are stored directly in Python.
+- Only a small set of DevOps topics is supported.
+- Runbooks are currently stored directly in Python.
 - There is no vector database.
 - There is no dynamic RAG pipeline.
-- The agent does not execute infrastructure commands.
 - There is no web UI.
+- The agent does not execute infrastructure commands.
 - Conversation memory is intentionally minimal.
-- EC2 was used as the runtime host because of resource limitations on the original desktop.
-
-These trade-offs were intentional to keep the assignment focused.
+- EC2 was used as the runtime host because of resource limits on the original desktop.
 
 ---
 
@@ -645,15 +611,15 @@ These trade-offs were intentional to keep the assignment focused.
 Given more time, I would consider:
 
 1. Moving runbooks into separate Markdown or JSON files.
-2. Adding semantic retrieval over a larger runbook library.
-3. Supporting additional topics such as AWS, Terraform, CI/CD, Linux, and networking.
+2. Adding semantic retrieval across a larger runbook library.
+3. Supporting AWS, Terraform, CI/CD, Linux, and networking topics.
 4. Adding streaming responses.
 5. Using the mimOE traceable inference endpoint for observability.
-6. Adding structured logging.
-7. Adding automated tests.
-8. Adding a lightweight web interface.
-9. Evaluating a larger local model when hardware resources permit.
-10. Comparing local execution across laptop, edge device, and cloud VM environments.
+6. Adding structured logs and automated tests.
+7. Adding a lightweight web UI.
+8. Evaluating a larger local model when resources allow.
+9. Comparing execution across desktop, edge, and cloud VM environments.
+10. Adding dynamic RAG while preserving local inference.
 
 ---
 
@@ -661,23 +627,23 @@ Given more time, I would consider:
 
 ### Why BYO Framework?
 
-It provided the simplest way to integrate my existing Python application with mimOE.
+It was the simplest way to integrate an existing Python application with mimOE while keeping the architecture transparent.
 
 ### Why the OpenAI Python SDK?
 
-mimOE exposes an OpenAI-compatible endpoint, allowing existing SDK patterns to be reused.
+mimOE exposes an OpenAI-compatible endpoint, so the standard SDK can be reused with a different `base_url`.
 
 ### Why `smollm-360m`?
 
-It is lightweight and appropriate for validating local inference and the mimOE integration.
+It is lightweight and sufficient to validate mimOE local inference and the assignment workflow.
 
 ### Why grounded runbooks?
 
-A small model can hallucinate on open-ended technical questions. Supplying trusted context improves reliability.
+A small model can hallucinate on open-ended technical questions. Supplying trusted context improves reliability significantly.
 
 ### Why AWS EC2?
 
-My original Windows desktop had limited free memory. EC2 provided sufficient resources to run the mimOE environment reliably while preserving the same application architecture.
+The original Windows desktop had limited free memory. EC2 provided a more stable environment while keeping the same mimOE-based application architecture.
 
 ---
 
@@ -685,16 +651,19 @@ My original Windows desktop had limited free memory. EC2 provided sufficient res
 
 This exercise provided hands-on experience with:
 
-- running LLM inference through mimOE,
-- working with an OpenAI-compatible local API,
-- integrating a BYO application,
-- diagnosing model-loading problems,
-- validating AI infrastructure layer by layer,
-- dealing with hardware/resource constraints,
+- mimOE Studio and runtime setup,
+- local model inference,
+- OpenAI-compatible APIs,
+- BYO Framework integration,
+- model registry validation,
+- troubleshooting runtime and memory issues,
 - grounding small models with trusted context,
-- and designing an AI application around the capabilities and limitations of the selected model.
+- environment-based configuration,
+- and designing around model limitations.
 
-The most important takeaway was that integrating an AI model is only one part of building an AI application. Runtime reliability, resource management, grounding, observability, configuration, and failure handling are equally important.
+The main takeaway is that building an AI application is not only about calling a model.
+
+Runtime reliability, resource management, grounding, configuration, observability, and failure handling are equally important.
 
 ---
 
@@ -705,7 +674,6 @@ The final solution demonstrates:
 ```text
 mimOE Studio               ✓
 mimOE Runtime              ✓
-Local model loading        ✓
 smollm-360m                ✓
 OpenAI-compatible API      ✓
 Python BYO agent           ✓
@@ -713,6 +681,7 @@ Grounded DevOps runbooks   ✓
 Health checking            ✓
 Error handling             ✓
 Environment configuration ✓
+AWS EC2 runtime hosting    ✓
 ```
 
-The project intentionally remains small and focused so that the mimOE integration and design decisions are easy to understand, reproduce, and explain.
+The project intentionally remains small and focused so that the mimOE integration, troubleshooting process, and engineering decisions are easy to understand and explain.
